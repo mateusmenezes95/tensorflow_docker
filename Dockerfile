@@ -50,12 +50,17 @@ RUN apt-get update && apt-get install -q -y --no-install-recommends \
     build-essential \
     tree \
     python3-argcomplete \
+    libgl1-mesa-glx \
+    graphviz \
     && apt-get -y autoremove \
     && apt-get clean autoclean \
     && rm -fr /var/lib/apt/lists/{apt,dpkg,cache,log} /tmp/* /var/tmp/*
 
 RUN pip3 install -U \
     matplotlib \
+    tensorflow_datasets \
+    opencv-python \
+    scikit-learn \
     setuptools \
     && rm -rf /root/.cache/pip
 
