@@ -26,11 +26,11 @@ TRAIN_LENGTH = 1000
 BATCH_SIZE = 64
 BUFFER_SIZE = 1000
 STEPS_PER_EPOCH = TRAIN_LENGTH // BATCH_SIZE
-OUTPUT_CHANNELS = 11
+OUTPUT_CHANNELS = 12
 SPLIT_SEED = 42
 
 def normalize(input_image):
-  input_image = tf.cast(input_image, tf.float32) / 255.0
+  input_image = input_image / 255.0
   return input_image
 
 def display(display_list):
@@ -91,8 +91,8 @@ def plot_images(images):
       plt.imshow(images[i])
   plt.show()
 
-def plot_original_image_and_mask(display_list):
-  plt.figure(figsize=(128, 128))
+def display(display_list):
+  plt.figure(figsize=(15, 15))
 
   title = ['Input Image', 'True Mask', 'Predicted Mask']
 
@@ -112,7 +112,7 @@ def unet_model(output_channels, down_stack):
     ]
 
     last = tf.keras.layers.Conv2DTranspose(
-        output_channels, 12, strides=2,
+        output_channels, 3, strides=2,
         padding='same', activation='softmax')  #64x64 -> 128x128
 
     inputs = tf.keras.layers.Input(shape=[128, 128, 3])
@@ -138,9 +138,9 @@ def create_mask(pred_mask):
     pred_mask = pred_mask[..., tf.newaxis]
     return pred_mask[0]
 
-def show_predictions(images, model):
-    pred_mask = model.predict(images[0])
-    plot_original_image_and_mask([images[0], images[1], create_mask(pred_mask)])
+def show_predictions(image, mask, model):
+    display([image, mask,
+                create_mask(model.predict(image[tf.newaxis, ...]))])
 
 class DisplayCallback(tf.keras.callbacks.Callback):
   def on_epoch_end(self, epoch, logs=None):
@@ -156,9 +156,8 @@ def main():
                                                         shuffle=True,
                                                         test_size=0.3,
                                                         random_state=SPLIT_SEED)
-
-    # (x_train, y_train) = normalize(x_train, y_train)
-    # (x_test, y_test) = normalize(x_test, y_test)
+    x_train = normalize(x_train)
+    x_test = normalize(x_test)
 
     base_model = tf.keras.applications.MobileNetV2(input_shape=[128, 128, 3], include_top=False)
 
@@ -178,16 +177,11 @@ def main():
     model = unet_model(OUTPUT_CHANNELS, down_stack)
     model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
     tf.keras.utils.plot_model(model, show_shapes=True)
-    # exit()
 
-    EPOCHS = 10
-    VAL_SUBSPLITS = 5
+    EPOCHS = 20
     # model = None
     # model = resnet.resnet20_model(input_shape=(128, 128, 3), num_classes=11)
     # model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
-
-    x_train = normalize(x_train)
-    y_train = normalize(y_train)
 
     model_history = model.fit(
         x=x_train,
@@ -196,10 +190,11 @@ def main():
         steps_per_epoch=STEPS_PER_EPOCH,
         validation_split=0.2
     )
-    
+
+    show_predictions(x_test[0], y_test[0], model)
+
     loss = model_history.history['loss']
-    # show_predictions([x_test[0], y_test[0]], model)
 
 if __name__ == "__main__":
     print("TensorFlow version: {}".format(tf.__version__))
-    # main()
+    main()
