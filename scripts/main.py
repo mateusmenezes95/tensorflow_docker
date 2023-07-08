@@ -13,25 +13,24 @@ import matplotlib.pyplot as plt
 
 from IPython.display import clear_output
 
-#include path to pyton path
-# sys.path.append("/home/tensorflow/python_ws/marine-debris-fls-datasets/md_fls_dataset")
-
-# import models.resnet as resnet
-
 dataset_basepath = "/home/tensorflow/python_ws/marine-debris-fls-datasets/md_fls_dataset/data/watertank-segmentation/"
 watertank_original_images_path = dataset_basepath + "Images"
 watertank_mask_images_path = dataset_basepath + "Masks"
 
-TRAIN_LENGTH = 1000
-BATCH_SIZE = 64
+TRAIN_LENGTH = 1307
+BATCH_SIZE = 32
 BUFFER_SIZE = 1000
 STEPS_PER_EPOCH = TRAIN_LENGTH // BATCH_SIZE
 OUTPUT_CHANNELS = 12
-SPLIT_SEED = 42
+SPLIT_SEED = 0
 
-def normalize(input_image):
-  input_image = input_image / 255.0
-  return input_image
+def normalize(input_image, by_mean_approach=False):
+    if by_mean_approach:
+        # Approach used in the paper
+        input_image = input_image - 84.5
+    else:
+        input_image = input_image / 255.0
+    return input_image
 
 def display(display_list):
   plt.figure(figsize=(15, 15))
@@ -68,7 +67,7 @@ def get_images(base_folder_path, image_type="original"):
     if len(image_files) == 0:
         print(f"No image files found in the folder '{base_folder_path}'.")
     else:
-        print(str(len(image_files)) +  " images found:")
+        print(str(len(image_files)) + " " + image_type + " images found!")
         for image_file in image_files:
             image_file_path = os.path.join(image_folder_path, image_file)
             if image_type == "original":
@@ -142,6 +141,29 @@ def show_predictions(image, mask, model):
     display([image, mask,
                 create_mask(model.predict(image[tf.newaxis, ...]))])
 
+def print_model_fit_metrics(model_history):
+    #plot the training and validation accuracy and loss at each epoch
+    loss = model_history.history['loss']
+    val_loss = model_history.history['val_loss']
+    epochs = range(1, len(loss) + 1)
+    plt.plot(epochs, loss, 'y', label='Training loss')
+    plt.plot(epochs, val_loss, 'r', label='Validation loss')
+    plt.title('Training and validation loss')
+    plt.xlabel('Epochs')
+    plt.ylabel('Loss')
+    plt.legend()
+    plt.show()
+
+    acc = model_history.history['accuracy']
+    val_acc = model_history.history['val_accuracy']
+    plt.plot(epochs, acc, 'y', label='Training acc')
+    plt.plot(epochs, val_acc, 'r', label='Validation acc')
+    plt.title('Training and validation accuracy')
+    plt.xlabel('Epochs')
+    plt.ylabel('Accuracy')
+    plt.legend()
+    plt.show()
+
 class DisplayCallback(tf.keras.callbacks.Callback):
   def on_epoch_end(self, epoch, logs=None):
     clear_output(wait=True)
@@ -159,7 +181,9 @@ def main():
     x_train = normalize(x_train)
     x_test = normalize(x_test)
 
-    base_model = tf.keras.applications.MobileNetV2(input_shape=[128, 128, 3], include_top=False)
+    base_model = tf.keras.applications.MobileNetV2(
+        input_shape=[128, 128, 3],
+        include_top=False)
 
     # Use as ativações dessas camadas
     layer_names = [
@@ -175,25 +199,28 @@ def main():
     down_stack.trainable = False
 
     model = unet_model(OUTPUT_CHANNELS, down_stack)
-    model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3),
+        loss='sparse_categorical_crossentropy',
+        metrics=['accuracy'])
     tf.keras.utils.plot_model(model, show_shapes=True)
 
     EPOCHS = 20
-    # model = None
-    # model = resnet.resnet20_model(input_shape=(128, 128, 3), num_classes=11)
-    # model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
 
     model_history = model.fit(
         x=x_train,
         y=y_train,
         epochs=EPOCHS,
         steps_per_epoch=STEPS_PER_EPOCH,
-        validation_split=0.2
+        validation_split=0.25
     )
 
     show_predictions(x_test[0], y_test[0], model)
+    print_model_fit_metrics(model_history)
 
-    loss = model_history.history['loss']
+    print("Evaluate on test data")
+    results = model.evaluate(x_test, y_test, batch_size=BATCH_SIZE)
+    print("test loss, test acc:", results)
 
 if __name__ == "__main__":
     print("TensorFlow version: {}".format(tf.__version__))
