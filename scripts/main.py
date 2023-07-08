@@ -1,13 +1,18 @@
 from __future__ import absolute_import, division, print_function, unicode_literals
+from re import T
+import re
 
 import sys
 
 import cv2
 import os
 from cv2 import norm
+from cv2 import mean
 import numpy as np
+from sklearn.metrics import confusion_matrix
 from sklearn.model_selection import train_test_split
 import tensorflow as tf
+import keras
 from tensorflow_examples.models.pix2pix import pix2pix
 import matplotlib.pyplot as plt
 
@@ -17,12 +22,27 @@ dataset_basepath = "/home/tensorflow/python_ws/marine-debris-fls-datasets/md_fls
 watertank_original_images_path = dataset_basepath + "Images"
 watertank_mask_images_path = dataset_basepath + "Masks"
 
+SAVE_MODEL = False
 TRAIN_LENGTH = 1307
 BATCH_SIZE = 32
 BUFFER_SIZE = 1000
 STEPS_PER_EPOCH = TRAIN_LENGTH // BATCH_SIZE
 OUTPUT_CHANNELS = 12
 SPLIT_SEED = 0
+CLASS_NAMES = [
+    "background",
+    "bottle",
+    "can",
+    "chain",
+    "drink-carton",
+    "hook",
+    "propeller",
+    "shampoo-bottle",
+    "standing-bottle",
+    "tire",
+    "valve",
+    "wall"
+]
 
 def normalize(input_image, by_mean_approach=False):
     if by_mean_approach:
@@ -132,14 +152,65 @@ def unet_model(output_channels, down_stack):
 
     return tf.keras.Model(inputs=inputs, outputs=x)
 
-def create_mask(pred_mask):
+def create_single_mask(pred_mask):
     pred_mask = tf.argmax(pred_mask, axis=-1)
     pred_mask = pred_mask[..., tf.newaxis]
     return pred_mask[0]
 
+def create_all_masks(predictions):
+    # Extract the predicted classes with the highest probability for each pixel
+    predicted_classes = np.argmax(predictions, axis=-1)
+    return predicted_classes
+
 def show_predictions(image, mask, model):
     display([image, mask,
-                create_mask(model.predict(image[tf.newaxis, ...]))])
+                create_single_mask(model.predict(image[tf.newaxis, ...]))])
+
+def get_confusion_matrix(predictions, y_test):
+    predictions_masks = create_all_masks(predictions)
+    iou = keras.metrics.MeanIoU(num_classes=OUTPUT_CHANNELS)
+    iou.update_state(y_test, predictions_masks)
+    return np.array(iou.get_weights()).reshape(OUTPUT_CHANNELS, OUTPUT_CHANNELS), iou.result().numpy()
+
+def get_row_sum(matrix, row_index):
+    return np.sum(matrix[row_index, :])
+
+def get_column_sum(matrix, column_index):
+    return np.sum(matrix[:, column_index])
+
+def get_class_iou(confusion_matrix, class_index):
+    true_positives = confusion_matrix[class_index, class_index]
+    false_negatives = get_row_sum(confusion_matrix, class_index) - true_positives
+    false_positives = get_column_sum(confusion_matrix, class_index) - true_positives
+    iou = true_positives / (true_positives + false_negatives + false_positives)
+    return iou
+
+def plot_confusion_matrix(cm, class_labels):
+    from matplotlib.colors import Normalize
+
+    plt.figure(figsize=(15, 15))
+
+    norm = Normalize(vmin=np.min(cm), vmax=np.max(cm))
+    plt.imshow(cm, interpolation='nearest', cmap=plt.cm.Blues, norm=norm)
+    plt.colorbar()
+    # plt.title('Confusion Matrix')
+
+    # Add labels to the plot
+    tick_marks = np.arange(len(class_labels))
+    plt.tick_params(axis='x', which='both', bottom=False, top=True, labelbottom=False, labeltop=True)
+    plt.xticks(tick_marks, class_labels, rotation=45)
+    plt.yticks(tick_marks, class_labels)
+
+    thresh = np.max(cm) / 2
+    for i in range(cm.shape[0]):
+        for j in range(cm.shape[1]):
+            plt.text(j, i, int(cm[i, j]), ha='center', va='center', color='white' if cm[i, j] > thresh else 'black')
+
+    # Set axis labels and show the plot
+    plt.xlabel('Predicted label')
+    plt.ylabel('True label')
+    # plt.tight_layout()
+    plt.show()
 
 def print_model_fit_metrics(model_history):
     #plot the training and validation accuracy and loss at each epoch
@@ -164,13 +235,49 @@ def print_model_fit_metrics(model_history):
     plt.legend()
     plt.show()
 
+def print_iou_per_class_table(confusion_matrix, class_nameS):
+    # Create a dictionary with class names and their corresponding indices
+    class_indices = {class_name: i for i, class_name in enumerate(class_nameS)}
+
+    # Create a table header
+    table_header = "| Class Name | Class IoU |"
+    table_line = "-" * len(table_header)
+
+    # Print the table header
+    print(table_line)
+    print(table_header)
+    print(table_line)
+    # Iterate over the class names and calculate the IoU for each class
+    for class_name in class_nameS:
+        class_index = class_indices[class_name]
+        class_iou = get_class_iou(confusion_matrix, class_index)
+        # Format the class name and IoU values
+        class_name_formatted = f"| {class_name:<14}"
+        class_iou_formatted = f"| {class_iou:.4f}     "
+
+        # Print the table row
+        print(f"{class_name_formatted}{class_iou_formatted}|")
+
+    # Print the table bottom line
+    print(table_line)
+
+def get_images_per_class_indices(test_set, class_label):
+    selected_images = []
+    np.random.seed(SPLIT_SEED)
+    indices = np.where(test_set == class_label)[0]
+    selected_index = np.random.choice(indices)
+    selected_images.append(selected_index)
+    
+    return selected_images
+
 class DisplayCallback(tf.keras.callbacks.Callback):
   def on_epoch_end(self, epoch, logs=None):
     clear_output(wait=True)
     show_predictions()
     print ('\nSample Prediction after epoch {}\n'.format(epoch+1))
 
-def main():
+if __name__ == "__main__":
+    print("TensorFlow version: {}".format(tf.__version__))
     original_images = get_images(dataset_basepath, "original")
     mask_images = get_images(dataset_basepath, "mask")
 
@@ -181,47 +288,61 @@ def main():
     x_train = normalize(x_train)
     x_test = normalize(x_test)
 
-    base_model = tf.keras.applications.MobileNetV2(
-        input_shape=[128, 128, 3],
-        include_top=False)
+    script_path = os.path.dirname(os.path.abspath(__file__))
+    model_path = os.path.join(script_path, "mobile_net_v2_to_sonar.h5")
 
-    # Use as ativações dessas camadas
-    layer_names = [
-        'block_1_expand_relu',   # 64x64
-        'block_3_expand_relu',   # 32x32
-        'block_6_expand_relu',   # 16x16
-        'block_13_expand_relu',  # 8x8
-        'block_16_project',      # 4x4
-    ]
+    if (SAVE_MODEL):
+        base_model = tf.keras.applications.MobileNetV2(
+            input_shape=[128, 128, 3],
+            include_top=False)
 
-    layers = [base_model.get_layer(name).output for name in layer_names]
-    down_stack = tf.keras.Model(inputs=base_model.input, outputs=layers)
-    down_stack.trainable = False
+        # Use as ativações dessas camadas
+        layer_names = [
+            'block_1_expand_relu',   # 64x64
+            'block_3_expand_relu',   # 32x32
+            'block_6_expand_relu',   # 16x16
+            'block_13_expand_relu',  # 8x8
+            'block_16_project',      # 4x4
+        ]
 
-    model = unet_model(OUTPUT_CHANNELS, down_stack)
-    model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3),
-        loss='sparse_categorical_crossentropy',
-        metrics=['accuracy'])
-    tf.keras.utils.plot_model(model, show_shapes=True)
+        layers = [base_model.get_layer(name).output for name in layer_names]
+        down_stack = tf.keras.Model(inputs=base_model.input, outputs=layers)
+        down_stack.trainable = False
 
-    EPOCHS = 20
+        model = unet_model(OUTPUT_CHANNELS, down_stack)
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3),
+            loss='sparse_categorical_crossentropy',
+            metrics=['accuracy'])
+        tf.keras.utils.plot_model(model, show_shapes=True)
 
-    model_history = model.fit(
-        x=x_train,
-        y=y_train,
-        epochs=EPOCHS,
-        steps_per_epoch=STEPS_PER_EPOCH,
-        validation_split=0.25
-    )
+        EPOCHS = 20
 
-    show_predictions(x_test[0], y_test[0], model)
+        model_history = model.fit(
+            x=x_train,
+            y=y_train,
+            epochs=EPOCHS,
+            steps_per_epoch=STEPS_PER_EPOCH,
+            validation_split=0.25
+        )
+        model.save(model_path)
+    else:
+        model = tf.keras.models.load_model(model_path)
+
+    for i in range(len(CLASS_NAMES)):
+        index = get_images_per_class_indices(y_test, i)[0]
+        print("Class:", CLASS_NAMES[i])
+        show_predictions(x_test[index], y_test[index], model)
+
     print_model_fit_metrics(model_history)
-
     print("Evaluate on test data")
     results = model.evaluate(x_test, y_test, batch_size=BATCH_SIZE)
     print("test loss, test acc:", results)
-
-if __name__ == "__main__":
-    print("TensorFlow version: {}".format(tf.__version__))
-    main()
+    
+    predictions = model.predict(x_test)
+    
+    cm, mean_iou = get_confusion_matrix(predictions, y_test)
+    plot_confusion_matrix(cm, CLASS_NAMES)
+    plot_confusion_matrix(cm[1:, 1:], CLASS_NAMES[1:])
+    print("Mean IoU:", mean_iou)
+    print_iou_per_class_table(cm, CLASS_NAMES)
