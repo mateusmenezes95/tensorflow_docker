@@ -22,7 +22,7 @@ dataset_basepath = "/home/tensorflow/python_ws/marine-debris-fls-datasets/md_fls
 watertank_original_images_path = dataset_basepath + "Images"
 watertank_mask_images_path = dataset_basepath + "Masks"
 
-SAVE_MODEL = False
+SAVE_MODEL = True
 TRAIN_LENGTH = 1307
 BATCH_SIZE = 32
 BUFFER_SIZE = 1000
@@ -216,23 +216,27 @@ def print_model_fit_metrics(model_history):
     #plot the training and validation accuracy and loss at each epoch
     loss = model_history.history['loss']
     val_loss = model_history.history['val_loss']
-    epochs = range(1, len(loss) + 1)
-    plt.plot(epochs, loss, 'y', label='Training loss')
-    plt.plot(epochs, val_loss, 'r', label='Validation loss')
-    plt.title('Training and validation loss')
-    plt.xlabel('Epochs')
+    epochs = range(1, int(len(loss) + 1))
+    plt.plot(epochs, loss, 'y', label='Loss do treinamento')
+    plt.plot(epochs, val_loss, 'r', label='Loss da validação')
+    # plt.title('Loss')
+    plt.xlabel('Época')
     plt.ylabel('Loss')
+    plt.xticks(np.arange(0, max(epochs)+1, 5))
     plt.legend()
+    plt.grid(True, linestyle='--', linewidth=0.5, color='gray', alpha=0.5)
     plt.show()
 
     acc = model_history.history['accuracy']
     val_acc = model_history.history['val_accuracy']
-    plt.plot(epochs, acc, 'y', label='Training acc')
-    plt.plot(epochs, val_acc, 'r', label='Validation acc')
-    plt.title('Training and validation accuracy')
-    plt.xlabel('Epochs')
-    plt.ylabel('Accuracy')
+    plt.plot(epochs, acc, 'y', label='Precisão do treinamento')
+    plt.plot(epochs, val_acc, 'r', label='Precisão da validação')
+    # plt.title('Training and validation accuracy')
+    plt.xlabel('Época')
+    plt.ylabel('Precisão')
+    plt.xticks(np.arange(0, max(epochs)+1, 5))
     plt.legend()
+    plt.grid(True, linestyle='--', linewidth=0.5, color='gray', alpha=0.5)
     plt.show()
 
 def print_iou_per_class_table(confusion_matrix, class_nameS):
@@ -326,6 +330,8 @@ if __name__ == "__main__":
             validation_split=0.25
         )
         model.save(model_path)
+        print_model_fit_metrics(model_history)
+        print("Evaluate on test data")
     else:
         model = tf.keras.models.load_model(model_path)
 
@@ -334,8 +340,6 @@ if __name__ == "__main__":
         print("Class:", CLASS_NAMES[i])
         show_predictions(x_test[index], y_test[index], model)
 
-    print_model_fit_metrics(model_history)
-    print("Evaluate on test data")
     results = model.evaluate(x_test, y_test, batch_size=BATCH_SIZE)
     print("test loss, test acc:", results)
     
